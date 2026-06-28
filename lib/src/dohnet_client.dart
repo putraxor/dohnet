@@ -68,6 +68,7 @@ class DohnetClient {
               hostname,
               port,
               secure: _isSecureScheme(url.scheme),
+              sniHostname: hostname,
             );
           }
 
@@ -79,7 +80,15 @@ class DohnetClient {
             );
           }
 
-          return _connect(ip, port, secure: _isSecureScheme(url.scheme));
+          // Resolved IP may differ from the original hostname.
+          // Pass the original hostname as SNI so the server gets the
+          // correct Server Name Indication during TLS handshake.
+          return _connect(
+            ip,
+            port,
+            secure: _isSecureScheme(url.scheme),
+            sniHostname: hostname,
+          );
         };
   }
 
@@ -88,16 +97,26 @@ class DohnetClient {
       scheme == 'https' || scheme == 'wss';
 
   /// Creates a TCP or TLS connection task.
-  ConnectionTask<Socket> _connect(
+  ///
+  /// If [secure] is true, connects with TLS using [sniHostname] as the
+  /// Server Name Indication (SNI). This is critical when connecting via a
+  /// resolved IP address — CDNs and many servers reject connections with
+  /// an IP as SNI. Defaults to [host] if [sniHostname] is null.
+  Future<ConnectionTask<Socket>> _connect(
     String host,
     int port, {
     required bool secure,
-  }) {
+    String? sniHostname,
+  }) async {
     if (secure) {
+      // Connect via TCP first, then upgrade to TLS with the correct SNI.
+      // This ensures CDNs like Cloudflare receive the real hostname instead
+      // of a raw IP (which would be rejected).
+      final raw = await Socket.connect(host, port);
       return ConnectionTask.fromSocket(
-        SecureSocket.connect(
-          host,
-          port,
+        SecureSocket.secure(
+          raw,
+          host: sniHostname ?? host,
           onBadCertificate: badCertificateCallback ?? (_) => true,
         ),
         () {},
@@ -223,8 +242,8 @@ class DohnetClient {
       } else if (body is List<int>) {
         request.add(body);
       } else {
-        request.write(jsonEncode(body));
         request.headers.contentType = ContentType.json;
+        request.write(jsonEncode(body));
       }
     }
 
