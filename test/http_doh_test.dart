@@ -1,37 +1,28 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:dns_client/dns_client.dart';
 import 'package:dohnet/dohnet.dart';
 import 'package:test/test.dart';
 
-/// A mock [DnsClient] that returns predefined results without network calls.
-class MockDnsClient extends DnsClient {
-  final Map<String, List<InternetAddress>> records;
-
-  MockDnsClient(this.records);
-
-  @override
-  Future<List<InternetAddress>> lookup(String hostname) async {
-    return records[hostname] ?? [];
-  }
-
-  @override
-  Future<List<String>> lookupDataByRRType(
-    String hostname,
-    RRType rrType,
-  ) async {
-    return [];
-  }
+/// Creates a mock [DnsLookupFn] from predefined address records.
+DnsLookupFn mockLookup(Map<String, List<InternetAddress>> records) {
+  final ttl = 3600; // 1 hour for tests
+  return (String hostname) async {
+    final addresses = records[hostname];
+    if (addresses == null || addresses.isEmpty) return null;
+    final ipv4 = addresses.where((a) => a.type == InternetAddressType.IPv4);
+    final addr = ipv4.isNotEmpty ? ipv4.first : addresses.first;
+    return DnsLookupResult(ip: addr.address, ttlSeconds: ttl);
+  };
 }
 
 void main() {
   group('DohResolver', () {
-    late MockDnsClient mockDns;
+    late DnsLookupFn mockDns;
     late DohResolver resolver;
 
     setUp(() {
-      mockDns = MockDnsClient({
+      mockDns = mockLookup({
         'example.com': [InternetAddress('93.184.216.34')],
         'google.com': [
           InternetAddress('142.250.80.46'),
@@ -61,23 +52,38 @@ void main() {
     });
 
     test('caches resolved IPs', () async {
-      final ip1 = await resolver.resolve('example.com');
+      // Use a mutable map so we can verify caching works.
+      final records = <String, List<InternetAddress>>{
+        'example.com': [InternetAddress('93.184.216.34')],
+      };
+      final cachedResolver = DohResolver.custom(mockLookup(records));
+
+      final ip1 = await cachedResolver.resolve('example.com');
       expect(ip1, equals('93.184.216.34'));
 
-      mockDns.records['example.com'] = [InternetAddress('1.2.3.4')];
+      // Mutate the underlying data — cache should still return the old value.
+      records['example.com'] = [InternetAddress('1.2.3.4')];
 
-      final ip2 = await resolver.resolve('example.com');
+      final ip2 = await cachedResolver.resolve('example.com');
       expect(ip2, equals('93.184.216.34'));
     });
 
     test('clearCache removes all entries', () async {
-      await resolver.resolve('example.com');
-      expect(resolver.resolve('example.com'), completion('93.184.216.34'));
+      final records = <String, List<InternetAddress>>{
+        'example.com': [InternetAddress('93.184.216.34')],
+      };
+      final cachedResolver = DohResolver.custom(mockLookup(records));
 
-      resolver.clearCache();
+      await cachedResolver.resolve('example.com');
+      expect(
+        cachedResolver.resolve('example.com'),
+        completion('93.184.216.34'),
+      );
 
-      mockDns.records['example.com'] = [InternetAddress('1.2.3.4')];
-      final ip = await resolver.resolve('example.com');
+      cachedResolver.clearCache();
+
+      records['example.com'] = [InternetAddress('1.2.3.4')];
+      final ip = await cachedResolver.resolve('example.com');
       expect(ip, equals('1.2.3.4'));
     });
 
@@ -96,6 +102,21 @@ void main() {
       final b = DohResolver();
       expect(a, same(b));
     });
+
+    test('cacheSize reports correct number of entries', () async {
+      expect(resolver.cacheSize, equals(0));
+      await resolver.resolve('example.com');
+      expect(resolver.cacheSize, equals(1));
+      await resolver.resolve('google.com');
+      expect(resolver.cacheSize, equals(2));
+    });
+
+    test('removeFromCache removes a single entry', () async {
+      await resolver.resolve('example.com');
+      expect(resolver.cacheSize, equals(1));
+      resolver.removeFromCache('example.com');
+      expect(resolver.cacheSize, equals(0));
+    });
   });
 
   group('DohnetClient', () {
@@ -106,8 +127,7 @@ void main() {
     });
 
     test('can be constructed with custom resolver', () {
-      final mockDns = MockDnsClient({});
-      final resolver = DohResolver.custom(mockDns);
+      final resolver = DohResolver.custom((_) async => null);
       final client = DohnetClient(resolver: resolver);
       expect(client, isA<DohnetClient>());
       client.close();
@@ -160,8 +180,7 @@ void main() {
 
   group('DohWebSocket (legacy)', () {
     test('throws SocketException for unresolvable hostname', () async {
-      final mockDns = MockDnsClient({});
-      final resolver = DohResolver.custom(mockDns);
+      final resolver = DohResolver.custom((_) async => null);
       await expectLater(
         DohWebSocket.connect(
           'wss://nonexistent.example.com/ws',
@@ -172,8 +191,7 @@ void main() {
     });
 
     test('throws SocketException for empty host', () async {
-      final mockDns = MockDnsClient({});
-      final resolver = DohResolver.custom(mockDns);
+      final resolver = DohResolver.custom((_) async => null);
       await expectLater(
         DohWebSocket.connect('wss:///ws', resolver: resolver),
         throwsA(isA<SocketException>()),
