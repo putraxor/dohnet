@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_collection_literals
+
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
@@ -106,10 +108,7 @@ class DohResolver {
   /// Starts a periodic timer that purges expired entries.
   void _ensureCleanupTimer() {
     if (_cleanupTimer != null) return;
-    _cleanupTimer = Timer.periodic(
-      const Duration(minutes: 5),
-      (_) => _cache.removeWhere((_, e) => e.isExpired),
-    );
+    _cleanupTimer = Timer.periodic(const Duration(minutes: 5), (_) => _cache.removeWhere((_, e) => e.isExpired));
   }
 
   /// Default DNS lookup via [Google DoH JSON API](https://developers.google.com/speed/public-dns/docs/doh#json).
@@ -118,8 +117,7 @@ class DohResolver {
   /// bootstrapping — no circular dependency on our own cache.
   /// Requests A records (IPv4) and returns the first result with its TTL.
   static Future<DnsLookupResult?> _defaultDoHLookup(String hostname) async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
       final uri = Uri.parse(
         'https://dns.google/resolve'
@@ -128,10 +126,7 @@ class DohResolver {
       final request = await client.getUrl(uri);
       request.headers.set('accept', 'application/dns-json');
       final response = await request.close();
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 10));
+      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 10));
 
       if (response.statusCode != 200) return null;
 
@@ -144,10 +139,7 @@ class DohResolver {
       for (final ans in answers) {
         if (ans['type'] == 1) {
           // A record (IPv4)
-          return DnsLookupResult(
-            ip: ans['data'] as String,
-            ttlSeconds: (ans['TTL'] as int?) ?? _fallbackTTL.inSeconds,
-          );
+          return DnsLookupResult(ip: ans['data'] as String, ttlSeconds: (ans['TTL'] as int?) ?? _fallbackTTL.inSeconds);
         }
       }
       return null;
