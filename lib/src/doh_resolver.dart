@@ -63,9 +63,17 @@ class DohResolver {
   /// Periodic cleanup timer for expired entries.
   Timer? _cleanupTimer;
 
+  /// Deduplicates concurrent in-flight lookups per hostname.
+  /// First caller starts the lookup; subsequent callers await the same result.
+  final Map<String, Completer<String?>> _pendingLookups = {};
+
   /// Resolves [hostname] to an IP address string via DoH.
   ///
   /// Returns `null` if resolution fails.
+  ///
+  /// **Per-hostname lock:** If N concurrent calls arrive for the same
+  /// hostname, only the first fires a DoH lookup; the rest await the same
+  /// result. This prevents N parallel HTTPS connections to `dns.google`.
   Future<String?> resolve(String hostname) async {
     // Return immediately if already an IP address.
     if (_isIpAddress(hostname)) return hostname;
@@ -84,13 +92,28 @@ class DohResolver {
       _cache.remove(hostname);
     }
 
-    // ── Cache miss or expired → look up ────────────────────────────
-    final result = await _lookupFn(hostname);
-    if (result != null) {
-      _addToCache(hostname, result.ip, result.ttlSeconds);
-      return result.ip;
+    // ── Deduplicate concurrent in-flight lookups ───────────────────
+    final pending = _pendingLookups[hostname];
+    if (pending != null) {
+      return pending.future;
     }
-    return null;
+
+    final completer = Completer<String?>();
+    _pendingLookups[hostname] = completer;
+
+    try {
+      final result = await _lookupFn(hostname);
+      if (result != null) {
+        _addToCache(hostname, result.ip, result.ttlSeconds);
+      }
+      completer.complete(result?.ip);
+      return result?.ip;
+    } catch (e) {
+      completer.completeError(e);
+      rethrow;
+    } finally {
+      _pendingLookups.remove(hostname);
+    }
   }
 
   /// Inserts [hostname] → [ip] with the given [ttlSeconds].

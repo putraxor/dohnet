@@ -8,3 +8,4 @@
 pubspec.lock
 example/bug_repro_test.dart
 example/all_apis_example.dart
+ISSUE.md

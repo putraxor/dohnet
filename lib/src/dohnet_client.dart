@@ -80,9 +80,6 @@ class DohnetClient {
             );
           }
 
-          // Resolved IP may differ from the original hostname.
-          // Pass the original hostname as SNI so the server gets the
-          // correct Server Name Indication during TLS handshake.
           return _connect(
             ip,
             port,
@@ -102,28 +99,57 @@ class DohnetClient {
   /// Server Name Indication (SNI). This is critical when connecting via a
   /// resolved IP address — CDNs and many servers reject connections with
   /// an IP as SNI. Defaults to [host] if [sniHostname] is null.
+  ///
+  /// **Timeouts:** Both [Socket.connect] and [SecureSocket.secure] use
+  /// [connectionTimeout] so the operation never hangs forever.
+  ///
+  /// **Cleanup:** When [HttpClient] cancels or disposes the connection, the
+  /// cleanup callback closes the underlying socket so file descriptors are
+  /// not leaked.
   Future<ConnectionTask<Socket>> _connect(
     String host,
     int port, {
     required bool secure,
     String? sniHostname,
   }) async {
+    final timeout = _connectTimeout;
+
     if (secure) {
       // Connect via TCP first, then upgrade to TLS with the correct SNI.
       // This ensures CDNs like Cloudflare receive the real hostname instead
       // of a raw IP (which would be rejected).
-      final raw = await Socket.connect(host, port);
+      final rawFuture = Socket.connect(host, port, timeout: timeout);
+      // Chain the TLS handshake so it completes before ConnectionTask
+      // signals "ready". Without `.then()`, SecureSocket.secure returns
+      // immediately and defers the handshake until first write, which
+      // can trigger race conditions inside HttpClient.
+      final socketFuture = rawFuture.then((raw) => SecureSocket.secure(
+        raw,
+        host: sniHostname ?? host,
+        onBadCertificate: badCertificateCallback ?? (_) => true,
+      ).timeout(timeout));
       return ConnectionTask.fromSocket(
-        SecureSocket.secure(
-          raw,
-          host: sniHostname ?? host,
-          onBadCertificate: badCertificateCallback ?? (_) => true,
-        ),
-        () {},
+        socketFuture,
+        _cleanup(socketFuture),
       );
     }
-    return ConnectionTask.fromSocket(Socket.connect(host, port), () {});
+    final socketFuture = Socket.connect(host, port, timeout: timeout);
+    return ConnectionTask.fromSocket(
+      socketFuture,
+      _cleanup(socketFuture),
+    );
   }
+
+  /// Returns a cleanup callback that closes the socket when it becomes
+  /// available. Called by [HttpClient] when the connection is no longer
+  /// needed.
+  static void Function() _cleanup(Future<Socket> s) => () {
+    s.then((socket) => socket.close());
+  };
+
+  /// Resolved connection timeout (or a safe default when null).
+  Duration get _connectTimeout =>
+      connectionTimeout ?? const Duration(seconds: 30);
 
   // --------------------------------------------------------------------------
   // WebSocket
