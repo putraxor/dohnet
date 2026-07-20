@@ -45,53 +45,40 @@ class DohnetClient {
   }
 
   void _setupConnectionFactory() {
-    _client.connectionFactory =
-        (Uri url, String? proxyHost, int? proxyPort) async {
-          final hostname = url.host;
+    print('${DateTime.now()} [INFO] DohnetClient v200726 initialized');
+    _client.connectionFactory = (Uri url, String? proxyHost, int? proxyPort) async {
+      final hostname = url.host;
 
-          // Proxy → connect to proxy directly (no DoH).
-          if (proxyHost != null) {
-            final proxyPort_ = proxyPort ?? (url.port != 0 ? url.port : 80);
-            return _connect(proxyHost, proxyPort_, secure: false);
-          }
+      // Proxy → connect to proxy directly (no DoH).
+      if (proxyHost != null) {
+        final proxyPort_ = proxyPort ?? (url.port != 0 ? url.port : 80);
+        return _connect(proxyHost, proxyPort_, secure: false);
+      }
 
-          // Resolve port — Dart Uri returns 0 for unknown schemes like `wss`.
-          final port = url.port != 0
-              ? url.port
-              : _isSecureScheme(url.scheme)
-              ? 443
-              : 80;
+      // Resolve port — Dart Uri returns 0 for unknown schemes like `wss`.
+      final port = url.port != 0
+          ? url.port
+          : _isSecureScheme(url.scheme)
+          ? 443
+          : 80;
 
-          // Already an IP — no DoH needed.
-          if (_isIpAddress(hostname)) {
-            return _connect(
-              hostname,
-              port,
-              secure: _isSecureScheme(url.scheme),
-              sniHostname: hostname,
-            );
-          }
+      // Already an IP — no DoH needed.
+      if (_isIpAddress(hostname)) {
+        return _connect(hostname, port, secure: _isSecureScheme(url.scheme), sniHostname: hostname);
+      }
 
-          // Resolve via DoH.
-          final ip = await _resolver.resolve(hostname);
-          if (ip == null) {
-            throw SocketException(
-              'DohnetClient: DNS resolution failed for $hostname',
-            );
-          }
+      // Resolve via DoH.
+      final ip = await _resolver.resolve(hostname);
+      if (ip == null) {
+        throw SocketException('DohnetClient: DNS resolution failed for $hostname');
+      }
 
-          return _connect(
-            ip,
-            port,
-            secure: _isSecureScheme(url.scheme),
-            sniHostname: hostname,
-          );
-        };
+      return _connect(ip, port, secure: _isSecureScheme(url.scheme), sniHostname: hostname);
+    };
   }
 
   /// Whether the scheme requires TLS.
-  static bool _isSecureScheme(String scheme) =>
-      scheme == 'https' || scheme == 'wss';
+  static bool _isSecureScheme(String scheme) => scheme == 'https' || scheme == 'wss';
 
   /// Creates a TCP or TLS connection task.
   ///
@@ -106,12 +93,7 @@ class DohnetClient {
   /// **Cleanup:** When [HttpClient] cancels or disposes the connection, the
   /// cleanup callback closes the underlying socket so file descriptors are
   /// not leaked.
-  Future<ConnectionTask<Socket>> _connect(
-    String host,
-    int port, {
-    required bool secure,
-    String? sniHostname,
-  }) async {
+  Future<ConnectionTask<Socket>> _connect(String host, int port, {required bool secure, String? sniHostname}) async {
     final timeout = _connectTimeout;
 
     if (secure) {
@@ -123,21 +105,17 @@ class DohnetClient {
       // signals "ready". Without `.then()`, SecureSocket.secure returns
       // immediately and defers the handshake until first write, which
       // can trigger race conditions inside HttpClient.
-      final socketFuture = rawFuture.then((raw) => SecureSocket.secure(
-        raw,
-        host: sniHostname ?? host,
-        onBadCertificate: badCertificateCallback ?? (_) => true,
-      ).timeout(timeout));
-      return ConnectionTask.fromSocket(
-        socketFuture,
-        _cleanup(socketFuture),
+      final socketFuture = rawFuture.then(
+        (raw) => SecureSocket.secure(
+          raw,
+          host: sniHostname ?? host,
+          onBadCertificate: badCertificateCallback ?? (_) => true,
+        ).timeout(timeout),
       );
+      return ConnectionTask.fromSocket(socketFuture, _cleanup(socketFuture));
     }
     final socketFuture = Socket.connect(host, port, timeout: timeout);
-    return ConnectionTask.fromSocket(
-      socketFuture,
-      _cleanup(socketFuture),
-    );
+    return ConnectionTask.fromSocket(socketFuture, _cleanup(socketFuture));
   }
 
   /// Returns a cleanup callback that closes the socket when it becomes
@@ -148,8 +126,7 @@ class DohnetClient {
   };
 
   /// Resolved connection timeout (or a safe default when null).
-  Duration get _connectTimeout =>
-      connectionTimeout ?? const Duration(seconds: 30);
+  Duration get _connectTimeout => connectionTimeout ?? const Duration(seconds: 30);
 
   // --------------------------------------------------------------------------
   // WebSocket
@@ -190,8 +167,7 @@ class DohnetClient {
   /// Sends a GET request to [url].
   ///
   /// Optional [headers] are added to the request.
-  Future<DohnetResponse> get(Uri url, {Map<String, String>? headers}) =>
-      _send('GET', url, headers: headers);
+  Future<DohnetResponse> get(Uri url, {Map<String, String>? headers}) => _send('GET', url, headers: headers);
 
   /// Sends a POST request to [url].
   ///
@@ -200,62 +176,40 @@ class DohnetClient {
   /// - `String` → sent as-is.
   /// - `List<int>` → sent as raw bytes.
   /// - Other objects → JSON-encoded and `Content-Type: application/json` is set.
-  Future<DohnetResponse> post(
-    Uri url, {
-    Map<String, String>? headers,
-    Object? body,
-  }) => _send('POST', url, headers: headers, body: body);
+  Future<DohnetResponse> post(Uri url, {Map<String, String>? headers, Object? body}) =>
+      _send('POST', url, headers: headers, body: body);
 
   /// Sends a PUT request to [url].
   ///
   /// See [post] for how [body] is handled.
-  Future<DohnetResponse> put(
-    Uri url, {
-    Map<String, String>? headers,
-    Object? body,
-  }) => _send('PUT', url, headers: headers, body: body);
+  Future<DohnetResponse> put(Uri url, {Map<String, String>? headers, Object? body}) =>
+      _send('PUT', url, headers: headers, body: body);
 
   /// Sends a PATCH request to [url].
   ///
   /// See [post] for how [body] is handled.
-  Future<DohnetResponse> patch(
-    Uri url, {
-    Map<String, String>? headers,
-    Object? body,
-  }) => _send('PATCH', url, headers: headers, body: body);
+  Future<DohnetResponse> patch(Uri url, {Map<String, String>? headers, Object? body}) =>
+      _send('PATCH', url, headers: headers, body: body);
 
   /// Sends a DELETE request to [url].
   ///
   /// See [post] for how [body] is handled.
-  Future<DohnetResponse> delete(
-    Uri url, {
-    Map<String, String>? headers,
-    Object? body,
-  }) => _send('DELETE', url, headers: headers, body: body);
+  Future<DohnetResponse> delete(Uri url, {Map<String, String>? headers, Object? body}) =>
+      _send('DELETE', url, headers: headers, body: body);
 
   /// Sends a HEAD request to [url].
   ///
   /// Optional [headers] are added to the request.
-  Future<DohnetResponse> head(Uri url, {Map<String, String>? headers}) =>
-      _send('HEAD', url, headers: headers);
+  Future<DohnetResponse> head(Uri url, {Map<String, String>? headers}) => _send('HEAD', url, headers: headers);
 
   /// Sends an HTTP request with the given [method] to [url].
   ///
   /// This is the general-purpose method underpinning all the named helpers.
   /// See [post] for how [body] is handled.
-  Future<DohnetResponse> send(
-    String method,
-    Uri url, {
-    Map<String, String>? headers,
-    Object? body,
-  }) => _send(method, url, headers: headers, body: body);
+  Future<DohnetResponse> send(String method, Uri url, {Map<String, String>? headers, Object? body}) =>
+      _send(method, url, headers: headers, body: body);
 
-  Future<DohnetResponse> _send(
-    String method,
-    Uri url, {
-    Map<String, String>? headers,
-    Object? body,
-  }) async {
+  Future<DohnetResponse> _send(String method, Uri url, {Map<String, String>? headers, Object? body}) async {
     final request = await _client.openUrl(method, url);
 
     if (headers != null) {
@@ -383,12 +337,7 @@ class DohnetResponse {
   /// The raw response body bytes.
   final Uint8List bodyBytes;
 
-  const DohnetResponse({
-    required this.statusCode,
-    required this.headers,
-    required this.body,
-    required this.bodyBytes,
-  });
+  const DohnetResponse({required this.statusCode, required this.headers, required this.body, required this.bodyBytes});
 
   @override
   String toString() => 'DohnetResponse($statusCode, ${bodyBytes.length} bytes)';
